@@ -9,7 +9,7 @@ Only tested with iPhone 17pro portrait screenshots, but probably works with othe
 Example usage:
 
 ```bash
-./frame.py --out-dir ~/Desktop/2025.10\ post/rendered ~/Desktop/2025.10\ post/background.jpg frames/iphone-17/iPhone\ 17\ Pro/iPhone\ 17\ Pro\ -\ Cosmic\ Orange\ -\ Portrait.png ~/Desktop/2025.10\ post/*.png
+./frame.py --out-dir ~/Desktop/post/rendered ~/Desktop/post/background.jpg frames/iphone-17/iPhone\ 17\ Pro/iPhone\ 17\ Pro\ -\ Cosmic\ Orange\ -\ Portrait.png ~/Desktop/post/*.png
 ```
 
 Example output:
