@@ -5,3 +5,13 @@ Frame iPhone screenshots for instagram posts.
 Download device frames from https://developer.apple.com/design/resources/#product-bezels
 
 Only tested with iPhone 17pro portrait screenshots, but probably works with others.
+
+Example usage:
+
+```bash
+./frame.py --out-dir ~/Desktop/2025.10\ post/rendered ~/Desktop/2025.10\ post/background.jpg frames/iphone-17/iPhone\ 17\ Pro/iPhone\ 17\ Pro\ -\ Cosmic\ Orange\ -\ Portrait.png ~/Desktop/2025.10\ post/*.png
+```
+
+Example output:
+
+https://www.instagram.com/p/DPWi-7gEUP6/?img_index=1
