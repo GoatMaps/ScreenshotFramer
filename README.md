@@ -6,6 +6,15 @@ Download device frames from https://developer.apple.com/design/resources/#produc
 
 Only tested with iPhone 17pro portrait screenshots, but probably works with others.
 
+## Usage
+
+This is a command line tool. It takes 4 arguments:
+
+1. Output Directory
+2. Background image
+3. Device frame
+4. One or more screenshots
+
 Example usage:
 
 ```bash
