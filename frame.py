@@ -93,7 +93,10 @@ def process_video(
     )
 
     for frame_array in tqdm(
-        video.iter_frames(), total=total_frames, desc="Processing frames", unit="frame"
+        video.iter_frames(fps=fps),
+        total=total_frames,
+        desc="Processing frames",
+        unit="frame",
     ):
         # Convert to PIL Image
         frame_pil = Image.fromarray(frame_array).convert("RGBA")
