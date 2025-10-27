@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from PIL import Image, ImageOps
+from moviepy import VideoFileClip
+import numpy as np
 
 
 INSTAGRAM_SIZE = (1080, 1080)
@@ -30,16 +32,18 @@ class ScreenBBox:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Frame one or more iPhone screenshots for Instagram (1080x1080).",
+        description="Frame one or more iPhone screenshots or videos for Instagram (1080x1080).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("background", help="Background image file")
     parser.add_argument("frame", help="Device frame PNG with transparent screen cutout")
-    parser.add_argument("screenshots", nargs="+", help="One or more screenshot images")
+    parser.add_argument(
+        "screenshots", nargs="+", help="One or more screenshot images or video files"
+    )
     parser.add_argument(
         "--out-dir",
         default="out",
-        help="Directory to write output images (created if missing)",
+        help="Directory to write output images/videos (created if missing)",
     )
     parser.add_argument(
         "--prefix",
@@ -56,7 +60,79 @@ def load_image(path: str) -> Image.Image:
         raise RuntimeError(f"Failed to open image '{path}': {exc}")
 
 
-def detect_screen_bbox_from_frame(frame_img: Image.Image) -> Tuple[ScreenBBox, Image.Image]:
+def is_video_file(path: str) -> bool:
+    """Check if a file is a video based on extension."""
+    video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm", ".flv", ".wmv"}
+    _, ext = os.path.splitext(path.lower())
+    return ext in video_extensions
+
+
+def process_video(
+    video_path: str,
+    background: Image.Image,
+    frame_img: Image.Image,
+    scaled_screen_bbox: ScreenBBox,
+    frame_scaled_size: Tuple[int, int],
+    screen_mask_scaled: Image.Image,
+    bg_crop: Image.Image,
+    output_path: str,
+) -> None:
+    """Process a video file by framing each frame and reassembling with audio."""
+    print(f"Processing video: {video_path}")
+
+    # Load the video
+    video = VideoFileClip(video_path)
+    fps = video.fps
+    audio = video.audio
+
+    # Process each frame
+    processed_frames = []
+    print(f"Processing {video.duration:.1f}s video at {fps} fps...")
+
+    for frame_array in video.iter_frames():
+        # Convert to PIL Image
+        frame_pil = Image.fromarray(frame_array).convert("RGBA")
+
+        # Compose the frame using existing logic
+        composed = compose_frame(
+            bg_crop.copy(),
+            frame_img,
+            scaled_screen_bbox,
+            frame_pil,
+            frame_scaled_size,
+            screen_mask_scaled,
+        )
+
+        # Convert back to numpy array for moviepy
+        processed_frames.append(np.array(composed.convert("RGB")))
+
+    # Create a new video from processed frames
+    from moviepy import ImageSequenceClip
+
+    processed_video = ImageSequenceClip(processed_frames, fps=fps)
+
+    # Attach the original audio if it exists
+    if audio is not None:
+        processed_video = processed_video.with_audio(audio)
+
+    # Write output video
+    print(f"Writing video to: {output_path}")
+    processed_video.write_videofile(
+        output_path,
+        codec="libx264",
+        audio_codec="aac" if audio is not None else None,
+        logger=None,  # Suppress moviepy progress bars
+    )
+
+    # Clean up
+    video.close()
+    processed_video.close()
+    print(f"Video processing complete: {output_path}")
+
+
+def detect_screen_bbox_from_frame(
+    frame_img: Image.Image,
+) -> Tuple[ScreenBBox, Image.Image]:
     """Detect the screen bounding box from the device frame PNG.
 
     Strategy:
@@ -83,7 +159,12 @@ def detect_screen_bbox_from_frame(frame_img: Image.Image) -> Tuple[ScreenBBox, I
     q = deque()
 
     def enqueue_if_transparent(x: int, y: int) -> None:
-        if 0 <= x < width and 0 <= y < height and transparent[y][x] and not visited[y][x]:
+        if (
+            0 <= x < width
+            and 0 <= y < height
+            and transparent[y][x]
+            and not visited[y][x]
+        ):
             visited[y][x] = True
             q.append((x, y))
 
@@ -121,13 +202,21 @@ def detect_screen_bbox_from_frame(frame_img: Image.Image) -> Tuple[ScreenBBox, I
         while q2:
             x, y = q2.popleft()
             count += 1
-            if x < min_x: min_x = x
-            if x > max_x: max_x = x
-            if y < min_y: min_y = y
-            if y > max_y: max_y = y
+            if x < min_x:
+                min_x = x
+            if x > max_x:
+                max_x = x
+            if y < min_y:
+                min_y = y
+            if y > max_y:
+                max_y = y
             for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
                 if 0 <= nx < width and 0 <= ny < height:
-                    if transparent[ny][nx] and not visited[ny][nx] and not labeled[ny][nx]:
+                    if (
+                        transparent[ny][nx]
+                        and not visited[ny][nx]
+                        and not labeled[ny][nx]
+                    ):
                         labeled[ny][nx] = True
                         q2.append((nx, ny))
         return min_x, min_y, max_x, max_y, count
@@ -144,11 +233,14 @@ def detect_screen_bbox_from_frame(frame_img: Image.Image) -> Tuple[ScreenBBox, I
                     best_seed = (x, y)
 
     if best_bbox is None:
-        raise RuntimeError("Could not detect interior transparent screen area in frame image.")
+        raise RuntimeError(
+            "Could not detect interior transparent screen area in frame image."
+        )
 
     left, top, right, bottom = best_bbox
     # Build a precise hole mask for the largest interior transparent region using inverted alpha values
     from collections import deque
+
     inv_alpha = ImageOps.invert(alpha)
     hole_mask = Image.new("L", (width, height), 0)
     if best_seed is not None:
@@ -159,7 +251,11 @@ def detect_screen_bbox_from_frame(frame_img: Image.Image) -> Tuple[ScreenBBox, I
             hole_mask.putpixel((x, y), inv_alpha.getpixel((x, y)))
             for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
                 if 0 <= nx < width and 0 <= ny < height:
-                    if transparent[ny][nx] and not visited[ny][nx] and (nx, ny) not in filled:
+                    if (
+                        transparent[ny][nx]
+                        and not visited[ny][nx]
+                        and (nx, ny) not in filled
+                    ):
                         filled.add((nx, ny))
                         q3.append((nx, ny))
 
@@ -201,7 +297,9 @@ def left_aligned_crop(img: Image.Image, size: Tuple[int, int]) -> Image.Image:
 def crop_from_left(img: Image.Image, left: int, size: Tuple[int, int]) -> Image.Image:
     tgt_w, tgt_h = size
     if left + tgt_w > img.width or tgt_h > img.height:
-        raise RuntimeError("Not enough background width for all screenshots; increase background width or reduce count.")
+        raise RuntimeError(
+            "Not enough background width for all screenshots; increase background width or reduce count."
+        )
     return img.crop((left, 0, left + tgt_w, tgt_h))
 
 
@@ -234,12 +332,14 @@ def compose_frame(
     shot_cropped = center_crop(shot_resized, (screen_w, screen_h))
 
     # Extract the exact mask for the screen area from the precomputed interior-hole mask
-    screen_mask = screen_mask_scaled.crop((
-        scaled_screen_bbox.left,
-        scaled_screen_bbox.top,
-        scaled_screen_bbox.right,
-        scaled_screen_bbox.bottom,
-    ))
+    screen_mask = screen_mask_scaled.crop(
+        (
+            scaled_screen_bbox.left,
+            scaled_screen_bbox.top,
+            scaled_screen_bbox.right,
+            scaled_screen_bbox.bottom,
+        )
+    )
 
     # Place masked screenshot relative to the centered frame
     shot_layer = Image.new("RGBA", INSTAGRAM_SIZE, (0, 0, 0, 0))
@@ -270,7 +370,9 @@ def main() -> None:
     screen_bbox_orig, screen_mask_orig = detect_screen_bbox_from_frame(frame_img)
 
     # Compute uniform scale to fit frame inside 1080x1080 without distortion
-    scale = min(INSTAGRAM_SIZE[0] / frame_img.width, INSTAGRAM_SIZE[1] / frame_img.height)
+    scale = min(
+        INSTAGRAM_SIZE[0] / frame_img.width, INSTAGRAM_SIZE[1] / frame_img.height
+    )
     frame_scaled_size = (
         int(round(frame_img.width * scale)),
         int(round(frame_img.height * scale)),
@@ -307,29 +409,54 @@ def main() -> None:
             crops.append(crop_from_left(bg_for_instagram, left, INSTAGRAM_SIZE))
 
     # Compose outputs
-    outputs: List[Image.Image] = []
-    for i, (s_path, bg_crop) in enumerate(zip(args.screenshots, crops)):
-        screenshot = load_image(s_path)
-        out = compose_frame(
-            bg_crop,
-            frame_img,
-            scaled_screen,
-            screenshot,
-            frame_scaled_size,
-            screen_mask_scaled,
-        )
-        outputs.append(out)
+    outputs: List[Tuple[int, Image.Image]] = []
+    video_outputs: List[str] = []
 
-    # Save outputs
-    if num_shots == 1:
-        out_path = os.path.join(args.out_dir, f"{args.prefix}.jpg")
-        outputs[0].save(out_path, quality=95)
-        print(out_path)
-    else:
-        for i, out_img in enumerate(outputs, start=1):
-            out_path = os.path.join(args.out_dir, f"{args.prefix}-{i:02d}.jpg")
-            out_img.save(out_path, quality=95)
+    for i, (s_path, bg_crop) in enumerate(zip(args.screenshots, crops)):
+        if is_video_file(s_path):
+            # Process video
+            if num_shots == 1:
+                out_path = os.path.join(args.out_dir, f"{args.prefix}.mp4")
+            else:
+                out_path = os.path.join(args.out_dir, f"{args.prefix}-{i + 1:02d}.mp4")
+
+            process_video(
+                s_path,
+                bg,
+                frame_img,
+                scaled_screen,
+                frame_scaled_size,
+                screen_mask_scaled,
+                bg_crop,
+                out_path,
+            )
+            video_outputs.append(out_path)
+        else:
+            # Process image
+            screenshot = load_image(s_path)
+            out = compose_frame(
+                bg_crop,
+                frame_img,
+                scaled_screen,
+                screenshot,
+                frame_scaled_size,
+                screen_mask_scaled,
+            )
+            outputs.append((i, out))
+
+    # Save image outputs
+    if outputs:
+        if num_shots == 1 and len(outputs) == 1:
+            out_path = os.path.join(args.out_dir, f"{args.prefix}.jpg")
+            outputs[0][1].save(out_path, quality=95)
             print(out_path)
+        else:
+            for idx, out_img in outputs:
+                out_path = os.path.join(
+                    args.out_dir, f"{args.prefix}-{idx + 1:02d}.jpg"
+                )
+                out_img.save(out_path, quality=95)
+                print(out_path)
 
 
 if __name__ == "__main__":
@@ -338,5 +465,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-
