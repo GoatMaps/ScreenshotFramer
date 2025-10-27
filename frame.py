@@ -9,6 +9,7 @@ from typing import List, Tuple
 from PIL import Image, ImageOps
 from moviepy import VideoFileClip
 import numpy as np
+from tqdm import tqdm
 
 
 INSTAGRAM_SIZE = (1080, 1080)
@@ -87,9 +88,14 @@ def process_video(
 
     # Process each frame
     processed_frames = []
-    print(f"Processing {video.duration:.1f}s video at {fps} fps...")
+    total_frames = int(video.duration * fps)
+    print(
+        f"Processing {video.duration:.1f}s video at {fps} fps ({total_frames} frames)..."
+    )
 
-    for frame_array in video.iter_frames():
+    for frame_array in tqdm(
+        video.iter_frames(), total=total_frames, desc="Processing frames", unit="frame"
+    ):
         # Convert to PIL Image
         frame_pil = Image.fromarray(frame_array).convert("RGBA")
 
