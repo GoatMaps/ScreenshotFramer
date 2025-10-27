@@ -70,7 +70,6 @@ def is_video_file(path: str) -> bool:
 
 def process_video(
     video_path: str,
-    background: Image.Image,
     frame_img: Image.Image,
     scaled_screen_bbox: ScreenBBox,
     frame_scaled_size: Tuple[int, int],
@@ -428,7 +427,6 @@ def main() -> None:
 
             process_video(
                 s_path,
-                bg,
                 frame_img,
                 scaled_screen,
                 frame_scaled_size,
